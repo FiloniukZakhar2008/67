@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=fastapi_db
+
+  web:
+    build: .
+    volumes:
+      - .:/app  # Підмонтування папки (Volume) для автооupdates
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:pass@db/fastapi_db
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
