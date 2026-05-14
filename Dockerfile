@@ -1,14 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.11
 
 WORKDIR /app
 
-RUN pip install poetry
+# Спочатку копіюємо лише файли залежностей (це прискорює збірку)
+COPY pyproject.toml poetry.lock ./
 
-# Копіюємо конфіги poetry
-COPY pyproject.toml poetry.lock* /app/
+# Встановлюємо poetry та залежності
+RUN pip install poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-interaction --no-ansi --no-root
 
-RUN poetry config virtualenvs.create false && poetry install --no-root
+# КРИТИЧНИЙ КРОК: Копіюємо ВЕСЬ інший код проекту в контейнер
+COPY . .
 
-COPY . /app/
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Команда запуску (переконайся, що main.py лежить у корені папки 67)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,23 +1,39 @@
 services:
-  db:
-    image: postgres:15
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=pass
-      - POSTGRES_DB=fastapi_db
-
-  web:
+  # Ваш додаток FastAPI
+  app:
     build: .
-    volumes:
-      - .:/app  # Підмонтування папки (Volume) для автооupdates
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://user:pass@db/fastapi_db
-    depends_on:
-      - db
+      - DATABASE_URL=postgresql://user:pass@db:5432/db
 
-volumes:
-  postgres_data:
+  # Prometheus - мозок моніторингу
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  # Grafana - інтерфейс з графіками
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+
+  # Експортер для PostgreSQL (стандартні метрики бази)
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://user:pass@db:5432/db?sslmode=disable"
+
+  # cAdvisor - моніторинг самих Docker контейнерів (CPU, RAM)
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
