@@ -1,6 +1,6 @@
 # Async Shop API
 
-FastAPI project connected to PostgreSQL with asynchronous SQLAlchemy sessions and Alembic migrations.
+FastAPI67 project connected to PostgreSQL with asynchronous SQLAlchemy sessions and Alembic migrations.
 
 ## Run
 
