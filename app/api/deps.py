@@ -1,20 +1,40 @@
-from fastapi import Request, Depends, HTTPException
-from jose import jwt
-from app.core.security import SECRET_KEY, ALGORITHM
+from fastapi import Cookie, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import decode_access_token
+from app.crud import user
+from app.db.session import get_db
+from app.models.user import User
+
+async def get_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
+    return db
 
 
-async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
-    token = request.cookies.get("access_token")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+async def get_current_user(
+        access_token: str | None = Cookie(default=None),
+        db: AsyncSession = Depends(get_db),
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )
+    if access_token is None:
+        raise credentials_exception
+
+    payload = decode_access_token(access_token)
+    if payload is None:
+        raise credentials_exception
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token invalid")
+        user_id_int = int(user_id)
+    except ValueError:
+        raise credentials_exception
 
-    user = await crud_user.get(db, id=int(user_id))
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
+    current_user = await user.get(db, user_id_int)
+    if current_user is None:
+        raise credentials_exception
+    return current_user

@@ -1,10 +1,12 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from app.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=True)
+
+engine = create_async_engine(settings.database_url, echo=settings.DB_ECHO)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-# Залежність для FastAPI
+
 async def get_db():
     async with async_session_factory() as session:
         yield session

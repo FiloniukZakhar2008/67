@@ -1,39 +1,111 @@
 services:
-  # Ваш додаток FastAPI
+  # База даних
+  db:
+    image: postgres:15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: zakhar_db
+    volumes:
+      - pg_data:/var/lib/postgresql/data # <--- ДОДАНО ТОМ
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d zakhar_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  test-db:
+    image: postgres:15
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: test_db
+    volumes:
+      - test_pg_data:/var/lib/postgresql/data # <--- ДОДАНО ТОМ
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d test_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://user:pass@db:5432/db
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=user
+      - DB_PASS=pass
+      - DB_NAME=zakhar_db
+    restart: unless-stopped
 
-  # Prometheus - мозок моніторингу
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
     ports:
       - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    depends_on:
+      - app
+      - postgres-exporter
+      - cadvisor
+    restart: unless-stopped
 
-  # Grafana - інтерфейс з графіками
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:latest
     ports:
       - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
-  # Експортер для PostgreSQL (стандартні метрики бази)
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter
     environment:
-      DATA_SOURCE_NAME: "postgresql://user:pass@db:5432/db?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://user:pass@db:5432/zakhar_db?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
-  # cAdvisor - моніторинг самих Docker контейнерів (CPU, RAM)
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.47.0
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
+      - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     ports:
       - "8080:8080"
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    restart: unless-stopped
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  pg_data:       # <--- ОГОЛОШЕНО ТОМ ДЛЯ ОСНОВНОЇ БАЗИ
+  test_pg_data:  # <--- ОГОЛОШЕНО ТОМ ДЛЯ ТЕСТОВОЇ БАЗИ

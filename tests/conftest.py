@@ -1,49 +1,79 @@
+import os
+import asyncio
 import pytest
-from sqlalchemy import create_mock_engine, create_engine
-from sqlalchemy.orm import sessionmaker
-from main import app  # імпорт вашого FastAPI додатку
-from database import Base, get_db
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-# URL вашої тестової бази
-TEST_SQLALCHEMY_DATABASE_URL = "postgresql://user:pass@localhost:5432/test_db"
+import app.models  # noqa: F401 - реєструємо всі моделі в Base.metadata
+from app.db.base import Base
+from app.db.session import get_db
+from app.main import app
 
-engine = create_engine(TEST_SQLALCHEMY_DATABASE_URL)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://user:pass@localhost:5434/test_db",
+)
 
 
+# 1. Глобальний event loop для стабільності pytest-asyncio
 @pytest.fixture(scope="session", autouse=True)
-def setup_database():
-    """Створюємо таблиці перед початком тестів та видаляємо після."""
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+def event_loop():
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
 
 
-@pytest.fixture
-def db_session():
-    """Фікстура для очищення таблиць після кожного тесту."""
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+# 2. Фікстура для створення Engine на кожен тест.
+# Це вирішує проблему InterfaceError (пул завжди свіжий)
+@pytest_asyncio.fixture(scope="function")
+async def db_engine():
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
-    yield session
+    # Перед тестом створюємо таблиці (якщо їх немає)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-    session.close()
-    transaction.rollback()
-    connection.close()
+    yield engine
+
+    # Після тесту дропаємо, щоб наступний тест починав з чистого листа
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+    await engine.dispose()
 
 
-@pytest.fixture
-def client(db_session):
-    """Підміна залежності get_db у FastAPI."""
+# 3. Створення фабрики сесій для конкретного тесту
+@pytest_asyncio.fixture(scope="function")
+async def session_factory(db_engine):
+    return async_sessionmaker(db_engine, expire_on_commit=False)
 
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
 
+# 4. Чиста сесія бази даних для CRUD тестів
+@pytest_asyncio.fixture(scope="function")
+async def db_session(session_factory):
+    async with session_factory() as session:
+        yield session
+        await session.rollback()
+
+
+# 5. Клієнт для API тестів з правильним перевизначенням залежностей
+@pytest_asyncio.fixture(scope="function")
+async def client(session_factory):
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    # Підміняємо депенденсі у FastAPI
     app.dependency_overrides[get_db] = override_get_db
-    from fastapi.testclient import TestClient
-    yield TestClient(app)
-    del app.dependency_overrides[get_db]
+
+    async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+    ) as test_client:
+        yield test_client
+
+    # Очищаємо після завершення тесту
+    app.dependency_overrides.clear()

@@ -1,21 +1,52 @@
-from datetime import datetime, timedelta
-from jose import jwt
-from passlib.context import CryptContext
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 
-# Налаштування хешування
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from jose import JWTError, jwt
 
-SECRET_KEY = "SUPER_SECRET_KEY" # Винеси це в .env!
-ALGORITHM = "HS256"
+from app.core.config import settings
 
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+PASSWORD_HASH_ITERATIONS = 260_000
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def decode_access_token(token: str) -> dict | None:
+    try:
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        return None
+
+
+def get_password_hash(password: str) -> str:
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    ).hex()
+    return f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt}${password_hash}"
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        algorithm, iterations, salt, expected_hash = hashed_password.split("$", 3)
+    except ValueError:
+        return False
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    if algorithm != "pbkdf2_sha256":
+        return False
+
+    actual_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        plain_password.encode("utf-8"),
+        salt.encode("utf-8"),
+        int(iterations),
+    ).hex()
+    return secrets.compare_digest(actual_hash, expected_hash)
